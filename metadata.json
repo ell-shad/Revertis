@@ -1,0 +1,5 @@
+{
+  "name": "Revertis",
+  "description": "A puzzle game where you remove tetromino shapes from a perfectly pre-filled board. Shapes can only be removed if they aren't blocked.",
+  "requestFramePermissions": []
+}
