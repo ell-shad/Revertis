@@ -687,7 +687,7 @@ export default function App() {
       {/* Footer */}
       <footer className="p-12 text-center flex flex-col items-center gap-6">
         <div className="opacity-20 text-[9px] uppercase tracking-[0.4em] font-bold">
-          &copy; 2026 REVERTIS // Sub-Orbital Logic Division
+          &copy; 2026 REVERTIS
         </div>
         
         <div className="flex flex-col items-center gap-3">
