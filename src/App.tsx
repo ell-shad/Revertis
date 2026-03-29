@@ -80,8 +80,8 @@ const PENTOMINOS: Record<string, Point[][]> = {
     [{ r: 0, c: 1 }, { r: 0, c: 2 }, { r: 1, c: 0 }, { r: 1, c: 1 }, { r: 2, c: 0 }],
   ],
   U: [
-    [{ r: 0, c: 0 }, { r: 0, c: 2 }, { r: 1, c: 0 }, { r: 1, c: 1 }, { r: 1, c: 2 }],
-    [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 1, c: 0 }, { r: 2, c: 0 }, { r: 2, c: 1 }],
+    [{ r: 0, c: 0 }, { r: 0, c: 2 }, { r: 1, c: 0 }, { r: 1, c: 1 }, { r: 1, c: 2 }], // U-up (safe)
+    [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 0, c: 2 }, { r: 1, c: 0 }, { r: 1, c: 2 }], // U-down (safe)
   ],
   V: [
     [{ r: 0, c: 0 }, { r: 1, c: 0 }, { r: 2, c: 0 }, { r: 2, c: 1 }, { r: 2, c: 2 }],
@@ -144,9 +144,41 @@ export default function App() {
   const [lastRemovalTime, setLastRemovalTime] = useState(0);
   const [comboProgress, setComboProgress] = useState(0);
   const [hoveredShapeId, setHoveredShapeId] = useState<string | null>(null);
+  const [highScore, setHighScore] = useState<number>(0);
 
-  const COMBO_TIMEOUT = 3000; // 3 seconds to keep combo
+  const COMBO_TIMEOUT = 1500; // 1.5 seconds to keep combo (faster)
   const config = DIFFICULTY_CONFIG[difficulty];
+
+  const [cellSize, setCellSize] = useState(48);
+
+  // Load high score on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('revertis-highscore');
+    if (saved) setHighScore(parseInt(saved, 10));
+  }, []);
+
+  // Update high score when score changes
+  useEffect(() => {
+    if (score > highScore) {
+      setHighScore(score);
+      localStorage.setItem('revertis-highscore', score.toString());
+    }
+  }, [score, highScore]);
+
+  const updateCellSize = useCallback(() => {
+    const width = window.innerWidth;
+    const padding = 64; // Increased padding for safer mobile fit
+    const availableWidth = width - padding;
+    const maxCols = config.cols;
+    const calculatedSize = Math.min(48, Math.floor(availableWidth / maxCols));
+    setCellSize(calculatedSize);
+  }, [config.cols]);
+
+  useEffect(() => {
+    updateCellSize();
+    window.addEventListener('resize', updateCellSize);
+    return () => window.removeEventListener('resize', updateCellSize);
+  }, [updateCellSize]);
 
   const generateBoard = useCallback(() => {
     setLoading(true);
@@ -227,7 +259,63 @@ export default function App() {
         return false;
       };
 
-      if (fill(0, 0)) {
+      const isSolvable = (grid: (string | null)[][], shapes: Record<string, ShapeInstance>): boolean => {
+        const currentGrid = grid.map(row => [...row]);
+        const currentShapes = { ...shapes };
+        let changed = true;
+
+        while (changed) {
+          changed = false;
+          const ids = Object.keys(currentShapes);
+          for (const id of ids) {
+            const shape = currentShapes[id];
+            let blocked = false;
+            for (const cell of shape.cells) {
+              let currR = cell.r - 1;
+              while (currR >= 0) {
+                const occupant = currentGrid[currR][cell.c];
+                if (occupant !== null && occupant !== id) {
+                  blocked = true;
+                  break;
+                }
+                currR--;
+              }
+              if (blocked) break;
+            }
+
+            if (!blocked) {
+              for (const cell of shape.cells) {
+                currentGrid[cell.r][cell.c] = null;
+              }
+              delete currentShapes[id];
+              changed = true;
+              break;
+            }
+          }
+        }
+        return Object.keys(currentShapes).length === 0;
+      };
+
+      let attempts = 0;
+      const MAX_ATTEMPTS = 50;
+      let success = false;
+
+      while (attempts < MAX_ATTEMPTS) {
+        // Reset grid and shapes for each attempt
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) newGrid[r][c] = null;
+        for (const key in newShapes) delete newShapes[key];
+        shapeIdCounter = 0;
+
+        if (fill(0, 0)) {
+          if (isSolvable(newGrid, newShapes)) {
+            success = true;
+            break;
+          }
+        }
+        attempts++;
+      }
+
+      if (success) {
         setGrid(newGrid);
         setShapes(newShapes);
         setTotalShapes(Object.keys(newShapes).length);
@@ -240,7 +328,11 @@ export default function App() {
         setIsWon(false);
         setGenerationId(genId);
       } else {
-        console.error("Failed to generate board");
+        console.error("Failed to generate solvable board after multiple attempts");
+        // Fallback to the last generated board even if not fully solvable, 
+        // or we could show an error. But simulation usually finds one quickly.
+        setGrid(newGrid);
+        setShapes(newShapes);
       }
       setLoading(false);
     }, 100);
@@ -329,10 +421,10 @@ export default function App() {
         for (let i = 0; i < 3; i++) {
           newParticles.push({
             id: `p-${Date.now()}-${Math.random()}`,
-            x: cell.c * 48 + 24 + (Math.random() - 0.5) * 20,
-            y: cell.r * 48 + 24 + (Math.random() - 0.5) * 20,
+            x: cell.c * cellSize + (cellSize / 2) + (Math.random() - 0.5) * (cellSize / 2),
+            y: cell.r * cellSize + (cellSize / 2) + (Math.random() - 0.5) * (cellSize / 2),
             color: shape.color,
-            size: Math.random() * 6 + 2
+            size: Math.random() * (cellSize / 8) + 2
           });
         }
       });
@@ -388,20 +480,20 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-[#E0E0E0] font-sans selection:bg-blue-500/30 overflow-x-hidden">
       {/* Header */}
-      <header className="p-6 flex justify-between items-center border-b border-white/10 backdrop-blur-md sticky top-0 z-50 bg-[#0A0A0A]/80">
-        <div className="flex flex-col">
-          <h1 className="text-2xl font-black tracking-tighter text-white flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20 relative overflow-hidden group">
+      <header className="p-4 md:p-6 flex flex-col sm:flex-row justify-between items-center gap-4 border-b border-white/10 backdrop-blur-md sticky top-0 z-50 bg-[#0A0A0A]/80">
+        <div className="flex flex-col items-center sm:items-start w-full sm:w-auto">
+          <h1 className="text-xl md:text-2xl font-black tracking-tighter text-white flex items-center gap-3">
+            <div className="w-7 h-7 md:w-8 md:h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20 relative overflow-hidden group">
               <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-white relative z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 md:w-5 md:h-5 text-white relative z-10">
                 <path d="M12 19V5M5 12l7-7 7 7" />
               </svg>
             </div>
             REVERTIS
           </h1>
           <div className="flex items-center gap-2 mt-1">
-            <p className="text-[10px] opacity-40 uppercase tracking-[0.2em]">Reverse Gravity Puzzle</p>
-            <div className="flex bg-white/5 rounded-md p-0.5 border border-white/5">
+            <p className="hidden xs:block text-[9px] md:text-[10px] opacity-40 uppercase tracking-[0.2em]">Reverse Gravity Puzzle</p>
+            <div className="flex bg-white/5 rounded-md p-1 border border-white/5">
               {(['EASY', 'HARD'] as Difficulty[]).map(d => (
                 <button
                   key={d}
@@ -409,7 +501,7 @@ export default function App() {
                     setDifficulty(d);
                     setIsPaused(false);
                   }}
-                  className={`px-2 py-0.5 text-[8px] font-bold rounded transition-all ${difficulty === d ? 'bg-blue-600 text-white shadow-lg' : 'opacity-40 hover:opacity-100'}`}
+                  className={`px-4 py-2 text-[11px] md:text-[12px] font-bold rounded transition-all ${difficulty === d ? 'bg-blue-600 text-white shadow-lg' : 'opacity-40 hover:opacity-100'}`}
                 >
                   {d}
                 </button>
@@ -417,16 +509,17 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-8">
-          <div className="flex gap-8">
+
+        <div className="flex flex-wrap justify-center items-center gap-3 md:gap-8 w-full sm:w-auto">
+          <div className="flex items-baseline gap-3 md:gap-8 pb-1">
             {combo > 1 && (
-              <div className="flex flex-col items-end relative">
-                <span className="text-[9px] uppercase tracking-widest opacity-30 text-yellow-500">Combo</span>
+              <div className="flex flex-col items-end relative min-w-[40px]">
+                <span className="text-[8px] md:text-[9px] uppercase tracking-widest opacity-30 text-yellow-500">Combo</span>
                 <div className="flex items-baseline gap-1">
-                  <span className="text-xl font-mono font-black text-yellow-500">x{Math.floor(combo / 2) + 1}</span>
-                  <span className="text-[10px] opacity-40">({combo})</span>
+                  <span className="text-lg md:text-xl font-mono font-black text-yellow-500">x{Math.floor(combo / 2) + 1}</span>
+                  <span className="text-[9px] md:text-[10px] opacity-40">({combo})</span>
                 </div>
-                <div className="absolute -bottom-2 right-0 w-full h-0.5 bg-white/5 rounded-full overflow-hidden">
+                <div className="absolute -bottom-1 right-0 w-full h-0.5 bg-white/5 rounded-full overflow-hidden">
                   <motion.div 
                     className="h-full bg-yellow-500"
                     initial={{ width: '100%' }}
@@ -437,32 +530,36 @@ export default function App() {
               </div>
             )}
             <div className="flex flex-col items-end">
-              <span className="text-[9px] uppercase tracking-widest opacity-30">Time</span>
-              <span className="text-xl font-mono font-black text-white">{formatTime(timer)}</span>
+              <span className="text-[7px] md:text-[9px] uppercase tracking-widest opacity-30">Time</span>
+              <span className="text-base md:text-xl font-mono font-black text-white leading-none">{formatTime(timer)}</span>
             </div>
             <div className="flex flex-col items-end">
-              <span className="text-[9px] uppercase tracking-widest opacity-30">Score</span>
-              <span className="text-xl font-mono font-black text-yellow-500">{score.toLocaleString()}</span>
+              <span className="text-[7px] md:text-[9px] uppercase tracking-widest opacity-30">Score</span>
+              <span className="text-base md:text-xl font-mono font-black text-yellow-500 leading-none">{score.toLocaleString()}</span>
+            </div>
+            <div className="flex flex-col items-end hidden sm:flex">
+              <span className="text-[7px] md:text-[9px] uppercase tracking-widest opacity-30 text-blue-400">Best</span>
+              <span className="text-base md:text-xl font-mono font-black text-blue-400 leading-none">{highScore.toLocaleString()}</span>
             </div>
             <div className="flex flex-col items-end">
-              <span className="text-[9px] uppercase tracking-widest opacity-30">Cleared</span>
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-mono font-black text-blue-500">{removedCount}</span>
-                <span className="text-xs opacity-20">/ {totalShapes}</span>
+              <span className="text-[7px] md:text-[9px] uppercase tracking-widest opacity-30">Cleared</span>
+              <div className="flex items-baseline gap-1 leading-none">
+                <span className="text-lg md:text-2xl font-mono font-black text-blue-500">{removedCount}</span>
+                <span className="text-[9px] md:text-xs opacity-20">/ {totalShapes}</span>
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <button 
               onClick={() => setIsPaused(!isPaused)}
-              className="p-3 hover:bg-white/5 rounded-xl transition-all active:scale-90 group border border-white/5"
+              className="p-3 md:p-4 hover:bg-white/5 rounded-xl transition-all active:scale-90 group border border-white/5"
               title={isPaused ? "Resume" : "Pause"}
             >
               {isPaused ? <Play className="w-5 h-5 text-green-400" /> : <Pause className="w-5 h-5 text-yellow-400" />}
             </button>
             <button 
               onClick={generateBoard}
-              className="p-3 hover:bg-white/5 rounded-xl transition-all active:scale-90 group border border-white/5"
+              className="p-3 md:p-4 hover:bg-white/5 rounded-xl transition-all active:scale-90 group border border-white/5"
               title="Regenerate Puzzle"
             >
               <RefreshCw className="w-5 h-5 group-hover:rotate-180 transition-transform duration-700 text-blue-400" />
@@ -471,9 +568,25 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-8 flex flex-col xl:flex-row gap-16 items-center justify-center min-h-[calc(100vh-100px)]">
+      <main className="max-w-6xl mx-auto p-4 md:p-8 flex flex-col xl:flex-row gap-8 md:gap-16 items-center justify-center min-h-[calc(100vh-100px)]">
+        {/* Mobile Progress Bar (Visible only on smaller screens) */}
+        <div className="w-full xl:hidden flex flex-col gap-2 px-4 mb-2">
+          <div className="flex justify-between text-[10px] uppercase tracking-[0.3em] font-bold">
+            <span className="text-blue-500">Purification Status</span>
+            <span className="opacity-40">{Math.round((removedCount / totalShapes) * 100)}%</span>
+          </div>
+          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden p-0.5 border border-white/5">
+            <motion.div 
+              className="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full"
+              initial={{ width: 0 }}
+              animate={{ width: `${(removedCount / totalShapes) * 100}%` }}
+              transition={{ type: 'spring', bounce: 0 }}
+            />
+          </div>
+        </div>
+
         {/* Game Board Container */}
-        <div className="relative p-3 bg-[#111111] rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/5">
+        <div className="relative p-2 md:p-3 bg-[#111111] rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/5">
           {/* Particles Layer */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
             <AnimatePresence>
@@ -503,10 +616,10 @@ export default function App() {
           </div>
 
           <div 
-            className="grid gap-1.5"
+            className="grid gap-1 md:gap-1.5"
             style={{ 
-              gridTemplateColumns: `repeat(${config.cols}, 48px)`,
-              gridTemplateRows: `repeat(${config.rows}, 48px)`
+              gridTemplateColumns: `repeat(${config.cols}, ${cellSize}px)`,
+              gridTemplateRows: `repeat(${config.rows}, ${cellSize}px)`
             }}
           >
             {grid.map((row, r) => 
@@ -518,7 +631,8 @@ export default function App() {
                 return (
                   <div 
                     key={`${generationId}-${r}-${c}`}
-                    className="w-[48px] h-[48px] relative"
+                    className="relative"
+                    style={{ width: cellSize, height: cellSize }}
                   >
                     <AnimatePresence mode="popLayout">
                       {shape && (
@@ -623,6 +737,16 @@ export default function App() {
                   <h2 className="text-4xl font-black tracking-tighter mb-3 text-white">GRID PURIFIED</h2>
                   <div className="flex flex-col gap-1 mb-8">
                     <p className="text-xs opacity-50 uppercase tracking-widest">Final Score: <span className="text-yellow-500 font-bold">{score.toLocaleString()}</span></p>
+                    {score >= highScore && score > 0 && (
+                      <motion.p 
+                        initial={{ scale: 0.8, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        className="text-[10px] text-blue-400 font-bold uppercase tracking-[0.2em] mb-1"
+                      >
+                        New High Score!
+                      </motion.p>
+                    )}
+                    <p className="text-xs opacity-50 uppercase tracking-widest">Best: <span className="text-blue-400 font-bold">{highScore.toLocaleString()}</span></p>
                     <p className="text-xs opacity-50 uppercase tracking-widest">Time: <span className="text-white font-bold">{formatTime(timer)}</span></p>
                   </div>
                   <p className="text-[10px] opacity-30 mb-10 max-w-[240px] mx-auto uppercase tracking-widest leading-relaxed">
@@ -641,13 +765,13 @@ export default function App() {
         </div>
 
         {/* Instructions / Sidebar */}
-        <div className="flex flex-col gap-10 max-w-sm">
-          <section className="bg-white/[0.03] p-8 rounded-[2rem] border border-white/5 relative overflow-hidden">
+        <div className="flex flex-col gap-8 max-w-sm w-full">
+          <section className="bg-white/[0.03] p-6 md:p-8 rounded-[2rem] border border-white/5 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 blur-3xl -z-10" />
             <h3 className="text-xs font-black uppercase tracking-[0.3em] mb-6 flex items-center gap-3 text-blue-500">
               <Info className="w-4 h-4" /> How to Play
             </h3>
-            <ul className="space-y-6 text-xs opacity-60 leading-relaxed uppercase tracking-widest">
+            <ul className="space-y-4 md:space-y-6 text-[10px] md:text-xs opacity-60 leading-relaxed uppercase tracking-widest">
               <li className="flex gap-4">
                 <span className="text-blue-500 font-mono font-bold">01</span>
                 <span>Click on a shape to <span className="text-white">extract</span> it from the grid.</span>
@@ -667,7 +791,8 @@ export default function App() {
             </ul>
           </section>
 
-          <div className="flex flex-col gap-4 px-4">
+          {/* Desktop Progress Bar (Visible only on larger screens) */}
+          <div className="hidden xl:flex flex-col gap-4 px-4">
             <div className="flex justify-between text-[9px] uppercase tracking-[0.3em] font-bold">
               <span className="text-blue-500">Purification Status</span>
               <span className="opacity-40">{Math.round((removedCount / totalShapes) * 100)}%</span>
@@ -683,6 +808,7 @@ export default function App() {
           </div>
         </div>
       </main>
+
 
       {/* Footer */}
       <footer className="p-12 text-center flex flex-col items-center gap-6">
@@ -703,11 +829,11 @@ export default function App() {
               <Linkedin className="w-4 h-4 text-white/40 group-hover:text-blue-400 transition-colors" />
             </a>
             <a 
-              href="https://github.com/ell-shad" 
+              href="https://github.com/ell-shad/Revertis" 
               target="_blank" 
               rel="noopener noreferrer"
               className="p-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 hover:border-white/20 transition-all group"
-              title="GitHub Profile"
+              title="GitHub Repository"
             >
               <Github className="w-4 h-4 text-white/40 group-hover:text-white transition-colors" />
             </a>
